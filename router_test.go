@@ -35,7 +35,7 @@ func TestRouterBuilderCorrectOrder(t *testing.T) {
 		{"GET", "/api/users"},
 		{"POST", "/api/users"},
 		{"GET", "/api/users/:id"},
-		{"GET", "/static/*"},
+		{"GET", "/files/*"},
 		{"GET", "/users"},
 	}
 
@@ -227,12 +227,12 @@ func TestWildcardRoutes(t *testing.T) {
 	})
 
 	// Add routes in lexicographic order
-	err := rb.AddRoute("GET", "/static/file.txt", staticHandler)
+	err := rb.AddRoute("GET", "/files/*", wildcardHandler)
 	if err != nil {
 		t.Fatalf("Error adding static route: %v", err)
 	}
 
-	err = rb.AddRoute("GET", "/static/*", wildcardHandler)
+	err = rb.AddRoute("GET", "/files/specific.txt", staticHandler)
 	if err != nil {
 		t.Fatalf("Error adding wildcard route: %v", err)
 	}
@@ -246,10 +246,10 @@ func TestWildcardRoutes(t *testing.T) {
 		path     string
 		expected string
 	}{
-		{"/static/file.txt", "static"},           // Exact match wins
-		{"/static/other.txt", "wildcard"},       // Wildcard match
-		{"/static/dir/file.txt", "wildcard"},    // Deep wildcard match
-		{"/static/", "wildcard"},                // Wildcard at directory level
+		{"/files/specific.txt", "static"},           // Exact match wins
+		{"/files/other.txt", "wildcard"},       // Wildcard match
+		{"/files/dir/file.txt", "wildcard"},    // Deep wildcard match
+		{"/files/", "wildcard"},                // Wildcard at directory level
 	}
 
 	for _, tc := range testCases {
