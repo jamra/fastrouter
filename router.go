@@ -282,3 +282,29 @@ func (r *Router) Stats() map[string]interface{} {
 		"max_depth": maxDepth,
 	}
 }
+
+// PathParamsKey is the context key for path parameters
+type contextKey struct{}
+
+var pathParamsKey = &contextKey{}
+
+
+// GetPathParams extracts path parameters from the request context
+func GetPathParams(r *http.Request) PathParams {
+	if params, ok := r.Context().Value(pathParamsKey).(PathParams); ok {
+		return params
+	}
+	return make(PathParams)
+}
+
+// RouteCount returns the total number of routes
+func (r *Router) RouteCount() int {
+	stats := r.Stats()
+	return stats["routes"].(int)
+}
+
+// NodeCount returns the total number of nodes in the trie
+func (r *Router) NodeCount() int {
+	stats := r.Stats()
+	return stats["nodes"].(int)
+}
