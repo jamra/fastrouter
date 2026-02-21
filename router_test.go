@@ -387,3 +387,142 @@ func TestCannotModifyBuiltRouter(t *testing.T) {
 		t.Error("Expected error when building router twice")
 	}
 }
+
+// Performance benchmarks
+func BenchmarkRouter_StaticRoute(b *testing.B) {
+	rb := NewRouterBuilder()
+	rb.AddRoute("GET", "/api/users", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	router, _ := rb.Build()
+	
+	req := httptest.NewRequest("GET", "/api/users", nil)
+	w := httptest.NewRecorder()
+	
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		router.ServeHTTP(w, req)
+	}
+}
+
+func BenchmarkRouter_ParamRoute(b *testing.B) {
+	rb := NewRouterBuilder()
+	rb.AddRoute("GET", "/api/users/:id", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	router, _ := rb.Build()
+	
+	req := httptest.NewRequest("GET", "/api/users/123", nil)
+	w := httptest.NewRecorder()
+	
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		router.ServeHTTP(w, req)
+	}
+}
+
+func BenchmarkRouter_MatchOnly(b *testing.B) {
+	rb := NewRouterBuilder()
+	rb.AddRoute("GET", "/api/users", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	rb.AddRoute("GET", "/api/users/:id", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	rb.AddRoute("GET", "/api/users/:id/posts", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	router, _ := rb.Build()
+	
+	paths := []string{"/api/users", "/api/users/123", "/api/users/123/posts"}
+	
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		path := paths[i%len(paths)]
+		handler, params := router.Match("GET", path)
+		_ = handler
+		_ = params
+	}
+}
+
+func BenchmarkRouter_MatchOnlyOptimized(b *testing.B) {
+	rb := NewRouterBuilder()
+	rb.AddRoute("GET", "/api/users", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	rb.AddRoute("GET", "/api/users/:id", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	rb.AddRoute("GET", "/api/users/:id/posts", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	router, _ := rb.Build()
+	
+	paths := []string{"/api/users", "/api/users/123", "/api/users/123/posts"}
+	
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		path := paths[i%len(paths)]
+		handler, params := router.MatchOptimized("GET", path)
+		_ = handler
+		_ = params
+	}
+}
+
+func BenchmarkRouter_MatchOnlyOptimized2(b *testing.B) {
+	rb := NewRouterBuilder()
+	rb.AddRoute("GET", "/api/users", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	rb.AddRoute("GET", "/api/posts", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	rb.AddRoute("GET", "/api/users/:id", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	rb.AddRoute("GET", "/api/users/:id/posts", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	router, _ := rb.Build()
+	
+	paths := []string{"/api/users", "/api/posts", "/api/users/123", "/api/users/123/posts"}
+	
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		path := paths[i%len(paths)]
+		handler, params := router.MatchOptimized2("GET", path)
+		_ = handler
+		if params != nil && len(params) > 0 {
+			// Return params to pool when done (in real usage)
+			paramsPool.Put(params)
+		}
+	}
+}
+
+func BenchmarkComparison_Static(b *testing.B) {
+	rb := NewRouterBuilder()
+	rb.AddRoute("GET", "/api/users", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	rb.AddRoute("GET", "/api/posts", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	router, _ := rb.Build()
+	
+	b.Run("FastRouter-Original", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			handler, params := router.Match("GET", "/api/users")
+			_ = handler
+			_ = params
+		}
+	})
+	
+	b.Run("FastRouter-Optimized", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			handler, params := router.MatchOptimized2("GET", "/api/users")
+			_ = handler
+			_ = params
+		}
+	})
+}
+
+func BenchmarkComparison_Params(b *testing.B) {
+	rb := NewRouterBuilder()
+	rb.AddRoute("GET", "/api/users/:id", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	rb.AddRoute("GET", "/api/users/:id/posts/:post", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	router, _ := rb.Build()
+	
+	b.Run("FastRouter-Original", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			handler, params := router.Match("GET", "/api/users/123")
+			_ = handler
+			_ = params
+		}
+	})
+	
+	b.Run("FastRouter-Optimized", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			handler, params := router.MatchOptimized2("GET", "/api/users/123")
+			_ = handler
+			if params != nil {
+				paramsPool.Put(params)
+			}
+		}
+	})
+}

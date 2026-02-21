@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"sync"
 	"strings"
 )
 
@@ -307,4 +308,165 @@ func (r *Router) RouteCount() int {
 func (r *Router) NodeCount() int {
 	stats := r.Stats()
 	return stats["nodes"].(int)
+}
+
+// MatchOptimized - optimized version that avoids string allocations
+func (r *Router) MatchOptimized(method, path string) (http.Handler, PathParams) {
+	if path == "" || path[0] != '/' {
+		path = "/" + path
+	}
+
+	params := make(PathParams)
+	handler := r.matchPathOptimized(r.root, path, 1, method, params)
+	return handler, params
+}
+
+// matchPathOptimized matches a path without creating string slices
+func (r *Router) matchPathOptimized(n *node, path string, start int, method string, params PathParams) http.Handler {
+	// If we've consumed the entire path, check for handler
+	if start >= len(path) {
+		if handler, exists := n.methods[method]; exists {
+			return handler
+		}
+		return nil
+	}
+	
+	// Find the end of current segment
+	end := start
+	for end < len(path) && path[end] != '/' {
+		end++
+	}
+	
+	segment := path[start:end]
+	
+	// Calculate next segment start position
+	nextStart := end + 1
+	if nextStart > len(path) {
+		nextStart = len(path)
+	}
+	
+	// Try exact match first (most common case)
+	if child, exists := n.children[segment]; exists {
+		if handler := r.matchPathOptimized(child, path, nextStart, method, params); handler != nil {
+			return handler
+		}
+	}
+	
+	// Try parameter matches
+	for _, child := range n.children {
+		if child.isParam {
+			params[child.paramName] = segment
+			if handler := r.matchPathOptimized(child, path, nextStart, method, params); handler != nil {
+				return handler
+			}
+			delete(params, child.paramName) // backtrack
+		}
+	}
+	
+	// Try wildcard match (matches rest of path)
+	if n.wildChild != nil {
+		if start < len(path) {
+			params["*"] = path[start:]
+		}
+		if handler, exists := n.wildChild.methods[method]; exists {
+			return handler
+		}
+	}
+	
+	return nil
+}
+
+
+// Pool for PathParams to avoid allocations
+var paramsPool = sync.Pool{
+	New: func() interface{} {
+		return make(PathParams)
+	},
+}
+
+// MatchOptimized2 - optimized version with parameter pooling
+func (r *Router) MatchOptimized2(method, path string) (http.Handler, PathParams) {
+	if path == "" || path[0] != '/' {
+		path = "/" + path
+	}
+
+	// Check if this route could have parameters
+	hasParams := false
+	for i := 1; i < len(path); i++ {
+		if path[i] == ':' || path[i] == '*' {
+			hasParams = true
+			break
+		}
+	}
+	
+	var params PathParams
+	var handler http.Handler
+	
+	if hasParams {
+		params = paramsPool.Get().(PathParams)
+		// Clear any existing params
+		for k := range params {
+			delete(params, k)
+		}
+		handler = r.matchPathOptimized(r.root, path, 1, method, params)
+		
+		// Return empty params to pool if no matches found
+		if handler == nil {
+			paramsPool.Put(params)
+			params = nil
+		}
+	} else {
+		// For static routes, don't allocate params at all
+		handler = r.matchPathOptimizedStatic(r.root, path, 1, method)
+	}
+	
+	return handler, params
+}
+
+// matchPathOptimizedStatic - for static routes without parameters
+func (r *Router) matchPathOptimizedStatic(n *node, path string, start int, method string) http.Handler {
+	// If we've consumed the entire path, check for handler
+	if start >= len(path) {
+		if handler, exists := n.methods[method]; exists {
+			return handler
+		}
+		return nil
+	}
+	
+	// Find the end of current segment
+	end := start
+	for end < len(path) && path[end] != '/' {
+		end++
+	}
+	
+	segment := path[start:end]
+	nextStart := end + 1
+	if nextStart > len(path) {
+		nextStart = len(path)
+	}
+	
+	// Only try exact matches for static routes
+	if child, exists := n.children[segment]; exists && !child.isParam {
+		return r.matchPathOptimizedStatic(child, path, nextStart, method)
+	}
+	
+	return nil
+}
+
+// ReleaseParams returns parameter map to the pool for reuse
+// Call this after processing a request with parameters to optimize memory usage
+func ReleaseParams(params PathParams) {
+	if params != nil && len(params) > 0 {
+		// Clear the map before returning to pool
+		for k := range params {
+			delete(params, k)
+		}
+		paramsPool.Put(params)
+	}
+}
+
+// FastMatch is an alias for the optimized matching function
+// This is the recommended method for high-performance applications
+func (r *Router) FastMatch(method, path string) (http.Handler, PathParams) {
+	return r.MatchOptimized2(method, path)
 }
